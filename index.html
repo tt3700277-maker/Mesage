@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-Identity Admin Panel</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root { --primary: #ff0055; --bg-dark: #050505; --glass: rgba(255, 255, 255, 0.03); --glass-border: rgba(255, 255, 255, 0.08); --text-main: #f4f4f5; }
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Plus Jakarta Sans', sans-serif; }
+        body { background: var(--bg-dark); color: var(--text-main); height: 100vh; display: flex; overflow: hidden; }
+
+        #sidebar { width: 300px; background: #0d0d0f; border-right: 1px solid var(--glass-border); display: flex; flex-direction: column; }
+        .sidebar-header { padding: 25px 20px; font-weight: 800; color: var(--primary); border-bottom: 1px solid var(--glass-border); }
+        #userList { flex: 1; overflow-y: auto; padding: 15px; }
+
+        .user-card { padding: 15px; border-radius: 12px; margin-bottom: 10px; cursor: pointer; background: var(--glass); border: 1px solid var(--glass-border); transition: 0.3s; }
+        .user-card.active { border-color: var(--primary); background: rgba(255, 0, 85, 0.1); }
+
+        #chatMain { flex: 1; display: flex; flex-direction: column; background: radial-gradient(circle at center, #111 0%, #050505 100%); }
+        .chat-header { padding: 20px; background: rgba(13, 13, 15, 0.8); border-bottom: 1px solid var(--glass-border); display: flex; justify-content: space-between; }
+
+        #msgBox { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
+        
+        .m { max-width: 75%; padding: 12px 18px; border-radius: 18px; font-size: 0.95rem; line-height: 1.4; cursor: pointer; position: relative; }
+        .m.u { background: #1c1c1f; align-self: flex-start; border-bottom-left-radius: 4px; }
+        .m.a { background: linear-gradient(135deg, var(--primary), #d40046); align-self: flex-end; border-bottom-right-radius: 4px; }
+        
+        .tag { display: block; font-size: 10px; font-weight: 800; margin-bottom: 5px; text-transform: uppercase; color: #aaa; }
+        .reply-hint { font-size: 10px; color: var(--primary); margin-top: 5px; font-weight: bold; }
+
+        .controls { padding: 20px; background: #0d0d0f; border-top: 1px solid var(--glass-border); display: flex; flex-direction: column; gap: 10px; }
+        .reply-bar { background: rgba(255, 0, 85, 0.1); padding: 8px 15px; border-radius: 8px; font-size: 12px; display: flex; justify-content: space-between; align-items: center; border-left: 3px solid var(--primary); }
+        
+        .input-area { display: flex; gap: 10px; }
+        input { flex: 1; padding: 12px 20px; border-radius: 100px; border: 1px solid var(--glass-border); background: #000; color: #fff; outline: none; }
+        button { padding: 12px 30px; background: var(--primary); border: none; color: #fff; border-radius: 100px; cursor: pointer; font-weight: 700; }
+    </style>
+</head>
+<body>
+
+<div id="sidebar">
+    <div class="sidebar-header">USER SESSIONS</div>
+    <div id="userList"></div>
+</div>
+
+<div id="chatMain">
+    <div class="chat-header">
+        <h4 id="activeTitle">Select User</h4>
+        <small id="currentIdentity" style="color:var(--primary); font-weight:bold;"></small>
+    </div>
+    
+    <div id="msgBox"></div>
+
+    <div class="controls">
+        <div id="replyingToBar" class="reply-bar" style="display:none;">
+            <span>Replying as: <b id="replyAsName">None</b></span>
+            <span onclick="cancelReply()" style="cursor:pointer; color:white;">✕</span>
+        </div>
+        <div class="input-area">
+            <input type="text" id="replyInp" placeholder="Click a user message to set identity..." onkeypress="if(event.key==='Enter') send()">
+            <button onclick="send()">SEND</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const S_URL = 'https://rpxifsrlavmqhjtcezlv.supabase.co';
+    const S_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJweGlmc3JsYXZtcWhqdGNlemx2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU4MzkxMDgsImV4cCI6MjA4MTQxNTEwOH0.uIsVuMypVVxU19cyzRw_c8Y964_fXx-uTA3C2kux6Rw';
+    const supabaseClient = supabase.createClient(S_URL, S_KEY);
+
+    let currentS = ""; 
+    let selectedProfile = ""; // এটিই হবে এডমিনের বর্তমান "ছদ্মনাম"
+
+    async function getUsers() {
+        const { data } = await supabaseClient.from('messages').select('sender_id, profile_id').order('created_at', {ascending: false});
+        if(!data) return;
+        const uniqueUsers = [...new Set(data.map(m => m.sender_id))];
+        document.getElementById('userList').innerHTML = uniqueUsers.map(uid => `
+            <div class="user-card ${currentS===uid?'active':''}" onclick="sel('${uid}')">
+                <b>👤 User: ${uid.slice(-6)}</b>
+            </div>`).join('');
+    }
+
+    function sel(uid) {
+        currentS = uid;
+        document.getElementById('activeTitle').innerText = "Client: " + uid.slice(-6);
+        load();
+        getUsers();
+    }
+
+    // মেসেজে ক্লিক করলে সেই প্রোফাইলের নাম সেট হবে
+    function setIdentity(pName) {
+        selectedProfile = pName;
+        document.getElementById('replyingToBar').style.display = 'flex';
+        document.getElementById('replyAsName').innerText = pName;
+        document.getElementById('replyInp').placeholder = "Reply as " + pName + "...";
+    }
+
+    function cancelReply() {
+        selectedProfile = "";
+        document.getElementById('replyingToBar').style.display = 'none';
+        document.getElementById('replyInp').placeholder = "Click a message to select profile...";
+    }
+
+    async function load() {
+        if(!currentS) return;
+        const { data } = await supabaseClient.from('messages').select('*').eq('sender_id', currentS).order('created_at', { ascending: true });
+        
+        const box = document.getElementById('msgBox');
+        box.innerHTML = (data || []).map(m => `
+            <div class="m ${m.is_admin?'a':'u'}" onclick="${!m.is_admin ? `setIdentity('${m.profile_id}')` : ''}">
+                <span class="tag">${m.is_admin ? 'Response from '+m.profile_id : 'User sent to '+m.profile_id}</span>
+                ${m.content}
+                ${!m.is_admin ? '<div class="reply-hint">Click to reply as this girl</div>' : ''}
+            </div>
+        `).join('');
+        box.scrollTop = box.scrollHeight;
+    }
+
+    async function send() {
+        const inp = document.getElementById('replyInp');
+        if(!inp.value || !currentS) return;
+        if(!selectedProfile) { alert("Please click on a user's message first to choose which girl you are replying as!"); return; }
+        
+        const text = inp.value;
+        inp.value = ""; 
+
+        await supabaseClient.from('messages').insert([{ 
+            sender_id: currentS, 
+            profile_id: selectedProfile, 
+            content: text, 
+            is_admin: true 
+        }]);
+        load();
+    }
+
+    setInterval(getUsers, 5000);
+    setInterval(load, 3000);
+    getUsers();
+</script>
+</body>
+</html>
